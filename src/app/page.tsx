@@ -6,15 +6,7 @@ interface Message {
   id: string;
   role: 'user' | 'ai';
   content: string;
-  tasks?: Task[];
   timestamp: Date;
-}
-
-interface Task {
-  id: string;
-  title: string;
-  status: 'pending' | 'running' | 'done' | 'error';
-  result?: string;
 }
 
 const QUICK_ACTIONS = [
@@ -24,15 +16,6 @@ const QUICK_ACTIONS = [
   'Help me think',
   'Summarize text',
   'Brainstorm ideas',
-];
-
-const CAPABILITIES = [
-  { icon: '🔍', title: 'Web Search', desc: 'Search the internet for information' },
-  { icon: '💻', title: 'Code Writing', desc: 'Write, debug, and explain code' },
-  { icon: '🖼️', title: 'Image Generation', desc: 'Create images from descriptions' },
-  { icon: '📊', title: 'Data Analysis', desc: 'Analyze and visualize data' },
-  { icon: '📝', title: 'Text Tasks', desc: 'Summarize, rewrite, translate' },
-  { icon: '🧠', title: 'Reasoning', desc: 'Solve complex problems step by step' },
 ];
 
 const SYSTEM_PROMPT = `You are a helpful AI assistant. Be concise, friendly, and helpful. You can help with:
@@ -51,15 +34,35 @@ export default function AIAgent() {
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [showCapabilities, setShowCapabilities] = useState(false);
-  const [model, setModel] = useState('llama-3.3-70b-versatile');
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [model, setModel] = useState('gemini-2.0-flash-exp');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const savedKey = localStorage.getItem('gemini-api-key');
+    if (savedKey) {
+      setApiKey(savedKey);
+    } else {
+      setShowApiKeyModal(true);
+    }
+  }, []);
+
+  const saveApiKey = () => {
+    localStorage.setItem('gemini-api-key', apiKey);
+    setShowApiKeyModal(false);
+  };
+
   const sendMessage = async (text: string) => {
     if (!text.trim()) return;
+    if (!apiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -82,34 +85,48 @@ export default function AIAgent() {
 
     try {
       const conversationHistory = messages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: m.content
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }]
       }));
 
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer gsk_sNhS4m3oqLBW2hXWP1S1WGdyb3FYQZQVGK4zJ1h2d3aX4mK9jH2nN6',
         },
         body: JSON.stringify({
-          model: model,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+          contents: [
             ...conversationHistory,
-            { role: 'user', content: text }
+            { role: 'user', parts: [{ text: text }] }
           ],
-          temperature: 0.7,
-          max_tokens: 4096,
+          systemInstruction: {
+            parts: [{ text: SYSTEM_PROMPT }]
+          },
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
+          }
         }),
       });
 
       const data = await response.json();
       
-      if (data.choices && data.choices[0]) {
+      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
         setMessages(prev => prev.map(m => 
           m.id === aiMessageId 
-            ? { ...m, content: data.choices[0].message.content }
+            ? { ...m, content: data.candidates[0].content.parts[0].text }
+            : m
+        ));
+      } else if (data.error) {
+        setMessages(prev => prev.map(m => 
+          m.id === aiMessageId 
+            ? { ...m, content: `Error: ${data.error.message}` }
+            : m
+        ));
+      } else {
+        setMessages(prev => prev.map(m => 
+          m.id === aiMessageId 
+            ? { ...m, content: 'No response received. Please check your API key.' }
             : m
         ));
       }
@@ -157,9 +174,9 @@ export default function AIAgent() {
   };
 
   const MODELS = [
-    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', desc: 'Fast & capable' },
-    { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', desc: 'Balanced' },
-    { id: 'llama3-70b-8192', name: 'Llama 3 70B', desc: 'Reliable' },
+    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', desc: 'Fastest & newest' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', desc: 'Reliable & fast' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', desc: 'Most capable' },
   ];
 
   return (
@@ -254,38 +271,6 @@ export default function AIAgent() {
 
       {showCapabilities && (
         <div className="capabilities-modal" onClick={() => setShowCapabilities(false)}>
-          <div className="capabilities-content" onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginBottom: 16, fontSize: 18 }}>Capabilities</h3>
-            {CAPABILITIES.map((cap, i) => (
-              <div key={i} className="capability-item">
-                <div className="capability-icon">{cap.icon}</div>
-                <div className="capability-info">
-                  <h4>{cap.title}</h4>
-                  <p>{cap.desc}</p>
-                </div>
-              </div>
-            ))}
-            <button 
-              style={{
-                width: '100%',
-                marginTop: 16,
-                padding: 12,
-                background: 'var(--bg-card)',
-                border: 'none',
-                borderRadius: 12,
-                color: 'var(--text-secondary)',
-                cursor: 'pointer'
-              }}
-              onClick={() => setShowCapabilities(false)}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {showCapabilities && (
-        <div className="capabilities-modal" onClick={() => setShowCapabilities(false)}>
           <div className="capabilities-content" onClick={e => e.stopPropagation()} style={{ position: 'relative' }}>
             <h3 style={{ marginBottom: 16, fontSize: 18 }}>Model Selection</h3>
             {MODELS.map(m => (
@@ -306,7 +291,7 @@ export default function AIAgent() {
             ))}
             <div style={{ marginTop: 20, padding: 16, background: 'var(--bg-card)', borderRadius: 12, textAlign: 'center' }}>
               <p style={{ color: 'var(--success)', fontSize: 13, fontWeight: 600 }}>
-                ✨ Powered by Groq - Unlimited free usage
+                ✨ Powered by Google AI Studio - Free tier available
               </p>
             </div>
             <button 
@@ -324,6 +309,52 @@ export default function AIAgent() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {showApiKeyModal && (
+        <div className="capabilities-modal">
+          <div className="capabilities-content" onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: 16, fontSize: 18 }}>🔑 Google AI API Key</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 16, fontSize: 14 }}>
+              Get a free API key from Google AI Studio (no credit card needed)
+            </p>
+            <input
+              type="password"
+              placeholder="Enter your API key..."
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              style={{
+                width: '100%',
+                padding: 14,
+                background: 'var(--bg-card)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 12,
+                color: 'white',
+                fontSize: 14,
+                marginBottom: 12
+              }}
+            />
+            <button
+              onClick={saveApiKey}
+              style={{
+                width: '100%',
+                padding: 14,
+                background: 'var(--accent)',
+                border: 'none',
+                borderRadius: 12,
+                color: 'white',
+                fontSize: 15,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Save & Continue
+            </button>
+            <p style={{ color: 'var(--text-muted)', marginTop: 12, fontSize: 12, textAlign: 'center' }}>
+              Get key at <span style={{ color: 'var(--accent)' }}>aistudio.google.com</span>
+            </p>
           </div>
         </div>
       )}
